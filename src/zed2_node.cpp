@@ -1,6 +1,11 @@
-#include <videocapture.hpp>
-#include <sensorcapture.hpp>
+#include "videocapture.hpp"
+#include "sensorcapture.hpp"
+#include "defines.hpp"
+// #include <zed-open-capture/videocapture.hpp>
+// #include <zed-open-capture/sensorcapture.hpp>
+// #include <zed-open-capture/defines.hpp>
 #include <ros/ros.h>
+#include <cmath>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/Imu.h>
 #include <cv_bridge/cv_bridge.h>
@@ -11,9 +16,11 @@
 #define RES sl_oc::video::RESOLUTION::HD720
 #define VERBOSITY sl_oc::VERBOSITY::INFO
 
+#define DEG2RAD(x) ((x) * M_PI / 180.0)
+
 class ZED2Node {
 public:
-    ZED2Node() : nh("~"), sensors(VERBOSITY) {
+    ZED2Node() : nh("~"){
         initCapture();
 
         img_pub1 = nh.advertise<sensor_msgs::Image>("/camera1/img", 10);
@@ -25,10 +32,16 @@ public:
 
         img_timer = nh.createTimer(ros::Duration(1.0 / img_rate), &ZED2Node::imagePub, this);
         imu_timer = nh.createTimer(ros::Duration(1.0 / imu_rate), &ZED2Node::imuPub, this);
+
+    }
+
+    ~ZED2Node(){
+        delete sensors;
+        delete cameras;
     }
 
     void imagePub(const ros::TimerEvent&) {
-        sl_oc::video::Frame frame = cameras.getLastFrame();
+        sl_oc::video::Frame frame = cameras->getLastFrame();
 
         if (frame.data == nullptr) {
             ROS_WARN("Dropped a frame!");
@@ -59,58 +72,60 @@ public:
     }
 
     void imuPub(const ros::TimerEvent&) {
-        const sl_oc::sensors::data::Imu imu = sensors.getLastIMUData(1500);
+        
+        const sl_oc::sensors::data::Imu imu = sensors->getLastIMUData(1500);
         if(imu.valid == sl_oc::sensors::data::Imu::NEW_VAL){
-            
+            sensor_msgs::Imu imu_msg;
+
+            ros::Time ts;
+            ts.fromNSec(imu.timestamp);
+
+            imu_msg.header.stamp = ts;
+
+            imu_msg.linear_acceleration.x = imu.aX;
+            imu_msg.linear_acceleration.y = imu.aY;
+            imu_msg.linear_acceleration.z = imu.aZ;
+
+            imu_msg.angular_velocity.x = DEG2RAD(imu.gX);
+            imu_msg.angular_velocity.y = DEG2RAD(imu.gY);
+            imu_msg.angular_velocity.z = DEG2RAD(imu.gZ);
+
+            imu_pub.publish(imu_msg);
         }
-
-        sensor_msgs::Imu imu_msg;
-
-        imu_msg.orientation.x = 0.0;
-        imu_msg.orientation.y = 0.0;
-        imu_msg.orientation.z = 0.0;
-        imu_msg.orientation.w = 1.0;
-
-        imu_msg.linear_acceleration.x = 0.0;
-        imu_msg.linear_acceleration.y = 0.0;
-        imu_msg.linear_acceleration.z = 0.0;
-
-        imu_msg.angular_velocity.x = 0.0;
-        imu_msg.angular_velocity.y = 0.0;
-        imu_msg.angular_velocity.z = 0.0;
-
-        imu_pub.publish(imu_msg);
+        
     }
 
     void initCapture() {
+        sensors = new sl_oc::sensors::SensorCapture(VERBOSITY);
+
         params.res = RES;
         params.fps = FPS;
-        cameras = sl_oc::video::VideoCapture(params);
+        cameras = new sl_oc::video::VideoCapture(params);
 
-        std::vector<int> devices = sensors.getDeviceList();
+        std::vector<int> devices = sensors->getDeviceList();
         if(devices.size() == 0){
             ROS_FATAL("No available Zed Camera!");
             ros::shutdown();
             exit(EXIT_FAILURE);
         }
-        if(!sensors.initializeSensors(devices[0])){
+        if(!sensors->initializeSensors(devices[0])){
             ROS_FATAL("Can't connect to the device!");
             ros::shutdown();
             exit(EXIT_FAILURE);
         }
-        if (!cameras.initializeVideo()) {
+        if (!cameras->initializeVideo()) {
             ROS_FATAL("Cannot open camera video capture!");
             ros::shutdown();
             exit(EXIT_FAILURE);
         }
 
-        std::cout << "Connected to camera sn: " << cameras.getSerialNumber() << "[" << cameras.getDeviceName() << "]" << std::endl;
+        std::cout << "Connected to camera sn: " << cameras->getSerialNumber() << "[" << cameras->getDeviceName() << "]" << std::endl;
     }
 
 private:
     sl_oc::video::VideoParams params;
-    sl_oc::video::VideoCapture cameras;
-    sl_oc::sensors::SensorCapture sensors;
+    sl_oc::video::VideoCapture* cameras;
+    sl_oc::sensors::SensorCapture* sensors;
     sl_oc::video::Frame last_frame;
     ros::NodeHandle nh;
     ros::Publisher img_pub1;
