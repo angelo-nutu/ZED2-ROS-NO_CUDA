@@ -1,9 +1,6 @@
 #include "videocapture.hpp"
 #include "sensorcapture.hpp"
 #include "defines.hpp"
-// #include <zed-open-capture/videocapture.hpp>
-// #include <zed-open-capture/sensorcapture.hpp>
-// #include <zed-open-capture/defines.hpp>
 #include <ros/ros.h>
 #include <cmath>
 #include <sensor_msgs/Image.h>
@@ -11,6 +8,8 @@
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
+#include <thread>
+#include <atomic>
 
 #define FPS sl_oc::video::FPS::FPS_60
 #define RES sl_oc::video::RESOLUTION::HD720
@@ -20,7 +19,7 @@
 
 class ZED2Node {
 public:
-    ZED2Node() : nh("~"){
+    ZED2Node() : nh("~"), stop(false) {
         initCapture();
 
         img_pub1 = nh.advertise<sensor_msgs::Image>("/camera1/img", 10);
@@ -30,17 +29,40 @@ public:
         img_rate = nh.param<double>("img_publish_rate", 60.0);
         imu_rate = nh.param<double>("imu_publish_rate", 400.0);
 
-        img_timer = nh.createTimer(ros::Duration(1.0 / img_rate), &ZED2Node::imagePub, this);
-        imu_timer = nh.createTimer(ros::Duration(1.0 / imu_rate), &ZED2Node::imuPub, this);
-
+        img_thread = std::thread(&ZED2Node::imageLoop, this);
+        imu_thread = std::thread(&ZED2Node::imuLoop, this);
     }
 
-    ~ZED2Node(){
+    ~ZED2Node() {
+        stop = true;
+        if (img_thread.joinable()) {
+            img_thread.join();
+        }
+        if (imu_thread.joinable()) {
+            imu_thread.join();
+        }
         delete sensors;
         delete cameras;
     }
 
-    void imagePub(const ros::TimerEvent&) {
+private:
+    void imageLoop() {
+        ros::Rate rate(img_rate);
+        while (ros::ok() && !stop) {
+            imagePub();
+            rate.sleep();
+        }
+    }
+
+    void imuLoop() {
+        ros::Rate rate(imu_rate);
+        while (ros::ok() && !stop) {
+            imuPub();
+            rate.sleep();
+        }
+    }
+
+    void imagePub() {
         sl_oc::video::Frame frame = cameras->getLastFrame();
 
         if (frame.data == nullptr) {
@@ -71,10 +93,9 @@ public:
         img_pub2.publish(img_msg2);
     }
 
-    void imuPub(const ros::TimerEvent&) {
-        
+    void imuPub() {
         const sl_oc::sensors::data::Imu imu = sensors->getLastIMUData(1500);
-        if(imu.valid == sl_oc::sensors::data::Imu::NEW_VAL){
+        if (imu.valid == sl_oc::sensors::data::Imu::NEW_VAL) {
             sensor_msgs::Imu imu_msg;
 
             ros::Time ts;
@@ -92,7 +113,6 @@ public:
 
             imu_pub.publish(imu_msg);
         }
-        
     }
 
     void initCapture() {
@@ -103,12 +123,12 @@ public:
         cameras = new sl_oc::video::VideoCapture(params);
 
         std::vector<int> devices = sensors->getDeviceList();
-        if(devices.size() == 0){
+        if (devices.size() == 0) {
             ROS_FATAL("No available Zed Camera!");
             ros::shutdown();
             exit(EXIT_FAILURE);
         }
-        if(!sensors->initializeSensors(devices[0])){
+        if (!sensors->initializeSensors(devices[0])) {
             ROS_FATAL("Can't connect to the device!");
             ros::shutdown();
             exit(EXIT_FAILURE);
@@ -122,7 +142,6 @@ public:
         std::cout << "Connected to camera sn: " << cameras->getSerialNumber() << "[" << cameras->getDeviceName() << "]" << std::endl;
     }
 
-private:
     sl_oc::video::VideoParams params;
     sl_oc::video::VideoCapture* cameras;
     sl_oc::sensors::SensorCapture* sensors;
@@ -131,8 +150,9 @@ private:
     ros::Publisher img_pub1;
     ros::Publisher img_pub2;
     ros::Publisher imu_pub;
-    ros::Timer img_timer;
-    ros::Timer imu_timer;
+    std::atomic<bool> stop;
+    std::thread img_thread;
+    std::thread imu_thread;
     double img_rate;
     double imu_rate;
 };
