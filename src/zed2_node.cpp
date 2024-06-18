@@ -89,12 +89,18 @@ private:
         sensor_msgs::ImagePtr img_msg1 = cv_bridge::CvImage(std_msgs::Header(), "bgr8", left).toImageMsg();
         sensor_msgs::ImagePtr img_msg2 = cv_bridge::CvImage(std_msgs::Header(), "bgr8", right).toImageMsg();
 
+        ros::Time ts;
+        ts.fromNSec(frame.timestamp);
+
+        img_msg1->header.stamp = ts;
+        img_msg2->header.stamp = ts;
+
         img_pub1.publish(img_msg1);
         img_pub2.publish(img_msg2);
     }
 
     void imuPub() {
-        const sl_oc::sensors::data::Imu imu = sensors->getLastIMUData(1500);
+        const sl_oc::sensors::data::Imu imu = sensors->getLastIMUData(2500);
         if (imu.valid == sl_oc::sensors::data::Imu::NEW_VAL) {
             sensor_msgs::Imu imu_msg;
 
